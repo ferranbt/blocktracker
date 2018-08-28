@@ -17,15 +17,16 @@ const defaultRPCEndpoint = "https://mainnet.infura.io"
 
 func main() {
 	endpoint := flag.String("endpoint", defaultRPCEndpoint, "RPC endpoint")
+	reconcile := flag.Bool("reconcile", false, "Reconcile blocks")
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
-	tracker, err := blocktracker.NewBlockTrackerWithEndpoint(logger, *endpoint)
+	tracker, err := blocktracker.NewBlockTrackerWithEndpoint(logger, *endpoint, *reconcile)
 	if err != nil {
 		fmt.Printf("Failed to start the tracker: %v", err)
 		return
 	}
 
-	eventCh := make(chan *types.Block)
+	eventCh := make(chan blocktracker.Block)
 	tracker.EventCh = eventCh
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -36,7 +37,8 @@ func main() {
 
 	for {
 		select {
-		case block := <-eventCh:
+		case evnt := <-eventCh:
+			block := evnt.(*types.Block)
 			fmt.Printf("%s: %s\n", block.Number().String(), block.Hash().String())
 		case sig := <-signalCh:
 			fmt.Printf("Caught signal: %v", sig)
