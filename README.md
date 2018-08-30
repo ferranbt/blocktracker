@@ -26,18 +26,27 @@ go get -u github.com/ferranbt/blocktracker
 ```
 
 ```
-tracker, err := blocktracker.NewBlockTrackerWithEndpoint(logger, rpcEndpoint)
+tracker, err := blocktracker.NewBlockTrackerWithEndpoint(logger, rpcEndpoint, true)
 if err != nil {
     panic(err)
 }
 
-eventCh := make(chan *types.Block)
+eventCh := make(chan blocktracker.Event)
 tracker.EventCh = eventCh
 
-go tracker.Start(context.Background())
+tracker.Start(context.Background())
 
 for {
-    block := <-eventCh:
-    fmt.Printf("%s: %s\n", block.Number().String(), block.Hash().String())
+    evnt := <-eventCh:
+	
+	fmt.Println("-------------------------------------")
+	for _, b := range evnt.Added {
+		block := b.(*types.Block)
+		fmt.Printf("ADD %s: %s\n", block.Number().String(), block.Hash().String())
+	}
+	for _, b := range evnt.Removed {
+		block := b.(*types.Block)
+		fmt.Printf("DEL %s: %s\n", block.Number().String(), block.Hash().String())
+	}
 }
 ```
