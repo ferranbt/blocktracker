@@ -82,17 +82,34 @@ type blocks []Block
 
 func TestReconcile(t *testing.T) {
 
+	type Event struct {
+		Added   blocks
+		Removed blocks
+	}
+
+	type Reconcile struct {
+		Block Block
+		Event Event
+	}
+
 	cases := []struct {
 		Name      string
 		Scenario  blocks
 		History   blocks
-		Reconcile blocks
+		Reconcile []Reconcile
 		Expected  blocks
 	}{
 		{
 			Name: "Empty history",
-			Reconcile: blocks{
-				mock(0x1),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x1),
+					Event: Event{
+						Added: blocks{
+							mock(0x1),
+						},
+					},
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -103,8 +120,10 @@ func TestReconcile(t *testing.T) {
 			History: blocks{
 				mock(0x1),
 			},
-			Reconcile: blocks{
-				mock(0x1),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x1),
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -115,8 +134,15 @@ func TestReconcile(t *testing.T) {
 			History: blocks{
 				mock(0x1),
 			},
-			Reconcile: blocks{
-				mock(0x2),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x2),
+					Event: Event{
+						Added: blocks{
+							mock(0x2),
+						},
+					},
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -130,8 +156,10 @@ func TestReconcile(t *testing.T) {
 				mock(0x2),
 				mock(0x3),
 			},
-			Reconcile: blocks{
-				mock(0x2),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x2),
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -147,8 +175,19 @@ func TestReconcile(t *testing.T) {
 				mock(0x3),
 				mock(0x4),
 			},
-			Reconcile: blocks{
-				mock(0x30).Parent(0x2),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x30).Parent(0x2),
+					Event: Event{
+						Added: blocks{
+							mock(0x30).Parent(0x2),
+						},
+						Removed: blocks{
+							mock(0x3),
+							mock(0x4),
+						},
+					},
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -166,8 +205,17 @@ func TestReconcile(t *testing.T) {
 				mock(0x1),
 				mock(0x2),
 			},
-			Reconcile: blocks{
-				mock(0x5),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x5),
+					Event: Event{
+						Added: blocks{
+							mock(0x3),
+							mock(0x4),
+							mock(0x5),
+						},
+					},
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -189,8 +237,21 @@ func TestReconcile(t *testing.T) {
 				mock(0x3),
 				mock(0x4),
 			},
-			Reconcile: blocks{
-				mock(0x50).Parent(0x40),
+			Reconcile: []Reconcile{
+				{
+					Block: mock(0x50).Parent(0x40),
+					Event: Event{
+						Added: blocks{
+							mock(0x30).Parent(0x2),
+							mock(0x40).Parent(0x30),
+							mock(0x50).Parent(0x40),
+						},
+						Removed: blocks{
+							mock(0x3),
+							mock(0x4),
+						},
+					},
+				},
 			},
 			Expected: blocks{
 				mock(0x1),
@@ -216,19 +277,40 @@ func TestReconcile(t *testing.T) {
 			}
 
 			// start reconcile
-			for _, b := range cc.Reconcile {
-				tracker.handleReconcile(b)
-			}
-
-			if len(cc.Expected) != len(tracker.blocks) {
-				tt.Fatalf("Expected length failed")
-			}
-
-			for indx, b := range tracker.blocks {
-				if !(b).(*block).Eq(cc.Expected[indx].(*block)) {
-					tt.Fatalf("Hash failed")
+			for _, r := range cc.Reconcile {
+				evnt, err := tracker.handleReconcile(r.Block)
+				if err != nil {
+					t.Fatal(err)
 				}
+
+				if evnt != nil {
+					if err := compareBlocks(r.Event.Added, evnt.Added); err != nil {
+						tt.Fatalf("Failed in added events: %v", err)
+					}
+
+					if err := compareBlocks(r.Event.Removed, evnt.Removed); err != nil {
+						tt.Fatalf("Failed in removed events: %v", err)
+					}
+				}
+			}
+
+			if err := compareBlocks(cc.Expected, tracker.blocks); err != nil {
+				tt.Fatal(err)
 			}
 		})
 	}
+}
+
+func compareBlocks(one blocks, two blocks) error {
+	if len(one) != len(two) {
+		return fmt.Errorf("Expected length failed")
+	}
+
+	for indx, b := range one {
+		if !(b).(*block).Eq(two[indx].(*block)) {
+			return fmt.Errorf("Hash failed at indx: %d", indx)
+		}
+	}
+
+	return nil
 }

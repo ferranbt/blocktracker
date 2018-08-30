@@ -2,6 +2,7 @@ package blocktracker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"math/big"
 	"time"
@@ -48,7 +49,7 @@ type EthClient interface {
 type BlockTracker struct {
 	logger    *log.Logger
 	client    EthClient
-	EventCh   chan Block
+	EventCh   chan Event
 	blocks    []Block
 	reconcile bool
 }
@@ -90,45 +91,65 @@ func (b *BlockTracker) exists(block Block) bool {
 	return false
 }
 
-func (b *BlockTracker) handleReconcile(block Block) {
-
-	// only one
-	if len(b.blocks) == 0 {
-		b.addBlock(block)
-		return
-	}
-
-	// block already in history
-	if b.exists(block) {
-		return
-	}
-
-	// normal sequence
-	if b.blocks[len(b.blocks)-1].Hash() == block.ParentHash() {
-		b.addBlock(block)
-		return
-	}
-
-	// parent in history
-	if indx := b.parentHashInHistory(block.ParentHash()); indx != -1 {
-		b.blocks = b.blocks[:indx+1]
-		b.addBlock(block)
-		return
-	}
-
-	b.backfill(block)
+// Event is the reconcile event
+type Event struct {
+	Added   []Block
+	Removed []Block
 }
 
-// TODO. use backfill with the goto
-// TODO. retention of blocks
-func (b *BlockTracker) backfill(block Block) {
-	parent, err := b.client.BlockByHash(context.Background(), block.ParentHash())
-	if err != nil {
-		panic("Father not found")
+func (b *BlockTracker) handleReconcile(block Block) (*Event, error) {
+	evnt := Event{}
+
+	addBlock := func(block Block) {
+		evnt.Added = append(evnt.Added, block)
+		b.addBlock(block)
 	}
 
-	b.handleReconcile(parent)
-	b.handleReconcile(block)
+	removeBlock := func(indx int) {
+		for i := indx + 1; i < len(b.blocks); i++ {
+			evnt.Removed = append(evnt.Removed, b.blocks[i])
+		}
+		b.blocks = b.blocks[:indx+1]
+	}
+
+	originalBlock := block
+
+RECONCILE:
+	// only one block in history
+	if len(b.blocks) == 0 {
+		addBlock(block)
+
+	} else if b.exists(block) {
+		// block already in history
+		return nil, nil
+
+	} else if b.blocks[len(b.blocks)-1].Hash() == block.ParentHash() {
+		// normal sequence
+		addBlock(block)
+
+	} else if indx := b.parentHashInHistory(block.ParentHash()); indx != -1 {
+		// parent in history
+		removeBlock(indx)
+		addBlock(block)
+
+	} else {
+		// backfill
+		parent, err := b.client.BlockByHash(context.Background(), block.ParentHash())
+		if err != nil {
+			return nil, fmt.Errorf("Parent with hash %s not found", block.ParentHash().String())
+		}
+
+		block = parent
+		goto RECONCILE
+	}
+
+	// When backfilling we have to reconcile the original block
+	if originalBlock.Hash() != block.Hash() {
+		block = originalBlock
+		goto RECONCILE
+	}
+
+	return &evnt, nil
 }
 
 func (b *BlockTracker) parentHashInHistory(hash common.Hash) int {
@@ -144,10 +165,15 @@ func (b *BlockTracker) parentHashInHistory(hash common.Hash) int {
 func (b *BlockTracker) Start(ctx context.Context) {
 	b.polling(ctx, func(block Block) {
 		if b.reconcile {
-			b.handleReconcile(block)
+			evnt, err := b.handleReconcile(block)
+			if err != nil {
+				b.logger.Printf("Failed to reconcile: %v", err)
+			} else if evnt != nil {
+				b.EventCh <- *evnt
+			}
+		} else {
+			b.EventCh <- Event{Added: []Block{block}}
 		}
-
-		b.EventCh <- block
 	})
 }
 
